@@ -126,6 +126,7 @@ https://vitaliemiron.github.io/cookidoo-mcp/use-cases/guided-cooking-annotation-
 - Upload user-owned recipe images.
 - Add structured guided-cooking annotations for weighing, time, temperature, speed, direction, and supported modes.
 - Read the Cookidoo shopping list and normalize ingredients.
+- Add or remove shopping-list recipes and manual items, and mark pantry staples as owned.
 - Read and safely edit a rolling seven-day My Week meal plan.
 
 ## Tools
@@ -134,18 +135,23 @@ https://vitaliemiron.github.io/cookidoo-mcp/use-cases/guided-cooking-annotation-
 2. get_recipe_details(recipe_id: str)
 3. get_custom_recipe_details(recipe_id: str)
 4. get_shopping_list_ingredients(recipe_id: str | None = None, include_owned: bool = false, include_additional_items: bool = true)
-5. get_meal_plan_week(date: str)
-6. add_recipes_to_meal_plan(date: str, recipe_ids: str, recipe_source: str = "auto", dry_run: bool = false)
-7. remove_recipe_from_meal_plan(date: str, recipe_id: str, recipe_source: str = "auto", dry_run: bool = false)
-8. move_recipe_in_meal_plan(recipe_id: str, from_date: str, to_date: str, recipe_source: str = "auto", dry_run: bool = false)
-9. copy_recipe_to_custom(recipe_id: str, servings: int = 4, dry_run: bool = false)
-10. generate_recipe_structure(name: str, ingredients: list[str], steps: list[str], servings: int = 4, prep_time: int = 30, total_time: int = 60, hints: str = "")
-11. validate_guided_recipe_structure(recipe_json: str)
-12. calculate_annotation_position(text: str, marker: str, occurrence: int = 1)
-13. update_custom_recipe_steps(recipe_id: str, steps_json: str, dry_run: bool = false)
-14. update_custom_recipe_ingredients(recipe_id: str, ingredients_json: str, dry_run: bool = false)
-15. upload_custom_recipe_image(recipe_id: str, image_path: str, dry_run: bool = false)
-16. upload_custom_recipe(recipe_json: str, dry_run: bool = false)
+5. add_recipes_to_shopping_list(recipe_ids: str, recipe_source: str = "auto", dry_run: bool = false)
+6. remove_recipes_from_shopping_list(recipe_ids: str, recipe_source: str = "auto", dry_run: bool = false)
+7. set_shopping_list_items_owned(item_ids: str = "", names: str = "", owned: bool = true, dry_run: bool = false)
+8. add_additional_items_to_shopping_list(names: str, dry_run: bool = false)
+9. remove_additional_items_from_shopping_list(item_ids: str, dry_run: bool = false)
+10. get_meal_plan_week(date: str)
+11. add_recipes_to_meal_plan(date: str, recipe_ids: str, recipe_source: str = "auto", dry_run: bool = false)
+12. remove_recipe_from_meal_plan(date: str, recipe_id: str, recipe_source: str = "auto", dry_run: bool = false)
+13. move_recipe_in_meal_plan(recipe_id: str, from_date: str, to_date: str, recipe_source: str = "auto", dry_run: bool = false)
+14. copy_recipe_to_custom(recipe_id: str, servings: int = 4, dry_run: bool = false)
+15. generate_recipe_structure(name: str, ingredients: list[str], steps: list[str], servings: int = 4, prep_time: int = 30, total_time: int = 60, hints: str = "")
+16. validate_guided_recipe_structure(recipe_json: str)
+17. calculate_annotation_position(text: str, marker: str, occurrence: int = 1)
+18. update_custom_recipe_steps(recipe_id: str, steps_json: str, dry_run: bool = false)
+19. update_custom_recipe_ingredients(recipe_id: str, ingredients_json: str, dry_run: bool = false)
+20. upload_custom_recipe_image(recipe_id: str, image_path: str, dry_run: bool = false)
+21. upload_custom_recipe(recipe_json: str, dry_run: bool = false)
 
 See tools.json for descriptions and categories.
 
@@ -171,7 +177,8 @@ Cookidoo country/language pair before login.
 
 ## Mutation previews
 
-Before creating or changing a recipe, image, or meal-plan entry, call the same
+Before creating or changing a recipe, image, meal-plan entry, or shopping-list
+item, call the same
 tool with dry_run=true. A preview returns will_mutate=false plus the validated
 target and exact planned changes. Show that preview to the user, then repeat
 the call with dry_run=false only after the requested change is clear. A dry run
@@ -235,6 +242,17 @@ Safe mutation pattern:
 ## Shopping
 
 get_shopping_list_ingredients can return the whole list or filter it by recipe. It can include or exclude owned items and additional user-created items. Use its structured output as the handoff to a grocery-search or cart integration; product selection and purchasing remain separate systems.
+
+add_recipes_to_shopping_list and remove_recipes_from_shopping_list accept comma, space, or newline-separated official or custom recipe IDs, route them like the calendar tools, and return the updated list under shopping_list. add_additional_items_to_shopping_list and remove_additional_items_from_shopping_list manage manual items; removal accepts only additional-item IDs.
+
+set_shopping_list_items_owned marks ingredients and additional items as owned (or needed again with owned=false). Select items with exact item_ids, comma-separated names, or both. Names match whole words and ignore case, accents, and the French articles/partitives de, d', du, des, le, la, l', les: "sel" matches "du sel" and "Sel de Guérande" but not "persil" or "selle d'agneau"; "eau" matches "d'eau" and "eau bouillante". Its dry run reads the current list (a session is required) and lists each item that would change with its ID, kind, description, recipe, and current state. IDs or names that match nothing are reported in unmatched_item_ids, unmatched_names, and warnings.
+
+Safe shopping pattern:
+
+1. Add the week's recipes with add_recipes_to_shopping_list (dry run first).
+2. Preview set_shopping_list_items_owned with the user's staples, for example names="eau, sel, poivre".
+3. Check the matched items and warnings with the user, then apply with dry_run=false.
+4. Read the list again with get_shopping_list_ingredients.
 
 ## Reliability
 

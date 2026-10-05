@@ -26,17 +26,22 @@ recipe.
 For grocery or cart workflows, use get_shopping_list_ingredients as the source
 of truth. Preserve its recipe grouping and recipe IDs. By default, ingredients
 marked as already owned are excluded; request include_owned only when the full
-historical list is needed.
+historical list is needed. Add or remove recipes with
+add_recipes_to_shopping_list and remove_recipes_from_shopping_list. After adding
+recipes, mark pantry staples the user already has (for example water, salt,
+pepper) as owned with set_shopping_list_items_owned so they no longer appear as
+things to buy; check its dry-run item list, because names match every item
+containing those words.
 
 For meal-planning workflows, read the relevant week with get_meal_plan_week
 before changing it. Official Cookidoo recipe IDs and custom/customer recipe IDs
 use different API operations; the calendar tools infer the source when possible
 and also accept an explicit recipe_source.
 
-Before creating or changing recipes, images, or calendar entries, call the
-mutation tool with dry_run=true. Show the returned preview to the user, then
-apply the same validated inputs with dry_run=false only after the requested
-change is clear. A dry run must never write to Cookidoo.
+Before creating or changing recipes, images, calendar entries, or the shopping
+list, call the mutation tool with dry_run=true. Show the returned preview to the
+user, then apply the same validated inputs with dry_run=false only after the
+requested change is clear. A dry run must never write to Cookidoo.
 """.strip()
 
 # Initialize FastMCP server
@@ -61,17 +66,25 @@ def _parse_calendar_date(value: str) -> CalendarDate:
         ) from error
 
 
+def _split_ids(value: str) -> list[str]:
+    """Split comma, whitespace, or newline-separated IDs."""
+
+    return [item_id for item_id in re.split(r"[\s,]+", value.strip()) if item_id]
+
+
 def _parse_recipe_ids(value: str) -> list[str]:
     """Parse comma, whitespace, or newline-separated recipe IDs."""
 
-    recipe_ids = [
-        recipe_id
-        for recipe_id in re.split(r"[\s,]+", value.strip())
-        if recipe_id
-    ]
+    recipe_ids = _split_ids(value)
     if not recipe_ids:
         raise ValueError("At least one recipe ID is required")
     return recipe_ids
+
+
+def _split_item_names(value: str) -> list[str]:
+    """Split comma or newline-separated item names; names may contain spaces."""
+
+    return [name.strip() for name in re.split(r"[,\n]+", value) if name.strip()]
 
 
 def _require_recipe_id(value: str) -> str:
@@ -127,20 +140,13 @@ def _dry_run_result(
     )
 
 
-def _meal_plan_sources(
+def _recipe_sources(
     recipe_ids: list[str],
     recipe_source: str,
 ) -> dict[str, list[str]]:
-    """Partition IDs exactly as the Cookidoo calendar mutation will."""
+    """Partition IDs exactly as the calendar and shopping-list mutations will."""
 
-    result: dict[str, list[str]] = {"official": [], "custom": []}
-    for recipe_id in dict.fromkeys(recipe_ids):
-        source = CookidooService._meal_plan_recipe_source(
-            recipe_id,
-            recipe_source,
-        )
-        result[source].append(recipe_id)
-    return result
+    return CookidooService._partition_recipe_ids(recipe_ids, recipe_source)
 
 
 @mcp.tool()
@@ -334,6 +340,291 @@ async def get_shopping_list_ingredients(
 
 
 @mcp.tool()
+async def add_recipes_to_shopping_list(
+    recipe_ids: str,
+    recipe_source: Literal["auto", "official", "custom"] = "auto",
+    dry_run: bool = False,
+) -> str:
+    """
+    Add the ingredients of one or more recipes to the Cookidoo shopping list.
+
+    Mixed official IDs (for example r460132) and custom recipe ULIDs are
+    supported when recipe_source is auto. Separate IDs with commas, spaces, or
+    newlines. After adding, staples such as water or salt can be marked as
+    owned with set_shopping_list_items_owned.
+
+    Args:
+        recipe_ids: One or more Cookidoo recipe IDs.
+        recipe_source: auto, official, or custom.
+        dry_run: Validate and preview the change without sending it to
+            Cookidoo.
+
+    Returns:
+        JSON with the added official/custom IDs and `shopping_list`, the
+        updated list in the get_shopping_list_ingredients shape.
+    """
+    global _cookidoo_service
+
+    try:
+        sources = _recipe_sources(_parse_recipe_ids(recipe_ids), recipe_source)
+        if dry_run:
+            return _dry_run_result(
+                "add_recipes_to_shopping_list",
+                "add recipes to shopping list",
+                target={"shopping_list": "Cookidoo shopping list"},
+                changes={
+                    "official_recipe_ids": sources["official"],
+                    "custom_recipe_ids": sources["custom"],
+                },
+                notes=[
+                    "Every ingredient of each recipe is added as still needed. "
+                    "Mark pantry staples as owned afterwards with "
+                    "set_shopping_list_items_owned."
+                ],
+            )
+
+        if not _cookidoo_service:
+            return "Not connected. Please run 'connect_to_cookidoo' first."
+
+        result = await _cookidoo_service.add_shopping_list_recipes(
+            sources["official"] + sources["custom"],
+            recipe_source,
+        )
+        return json.dumps(result, ensure_ascii=False, indent=2)
+    except Exception as e:
+        return f"Failed to add recipes to shopping list: {str(e)}"
+
+
+@mcp.tool()
+async def remove_recipes_from_shopping_list(
+    recipe_ids: str,
+    recipe_source: Literal["auto", "official", "custom"] = "auto",
+    dry_run: bool = False,
+) -> str:
+    """
+    Remove one or more recipes and their ingredients from the shopping list.
+
+    Accepts the same IDs and recipe_source values as
+    add_recipes_to_shopping_list. The recipes themselves are not changed.
+
+    Args:
+        recipe_ids: One or more Cookidoo recipe IDs.
+        recipe_source: auto, official, or custom.
+        dry_run: Validate and preview the removal without sending it to
+            Cookidoo.
+
+    Returns:
+        JSON with the removed official/custom IDs and the updated
+        `shopping_list`.
+    """
+    global _cookidoo_service
+
+    try:
+        sources = _recipe_sources(_parse_recipe_ids(recipe_ids), recipe_source)
+        if dry_run:
+            return _dry_run_result(
+                "remove_recipes_from_shopping_list",
+                "remove recipes from shopping list",
+                target={"shopping_list": "Cookidoo shopping list"},
+                changes={
+                    "official_recipe_ids": sources["official"],
+                    "custom_recipe_ids": sources["custom"],
+                },
+                notes=[
+                    "The recipes' ingredients leave the shopping list; the "
+                    "recipes themselves remain in Cookidoo."
+                ],
+            )
+
+        if not _cookidoo_service:
+            return "Not connected. Please run 'connect_to_cookidoo' first."
+
+        result = await _cookidoo_service.remove_shopping_list_recipes(
+            sources["official"] + sources["custom"],
+            recipe_source,
+        )
+        return json.dumps(result, ensure_ascii=False, indent=2)
+    except Exception as e:
+        return f"Failed to remove recipes from shopping list: {str(e)}"
+
+
+@mcp.tool()
+async def set_shopping_list_items_owned(
+    item_ids: str = "",
+    names: str = "",
+    owned: bool = True,
+    dry_run: bool = False,
+) -> str:
+    """
+    Mark shopping-list ingredients and additional items as owned or needed.
+
+    Owned items are hidden from get_shopping_list_ingredients by default, so
+    marking pantry staples (water, salt, pepper) as owned keeps them off the
+    list of things to buy.
+
+    Items can be selected exactly by ID, by name, or both. Names are
+    comma-separated (for example "eau, sel, poivre") and match whole words,
+    ignoring case, accents, and the articles/partitives de, d', du, des, le,
+    la, l', les: "sel" matches "du sel" but not "persil" or "selle", and "eau"
+    matches "d'eau" and "eau bouillante". Every matching item is selected,
+    including the same ingredient in several recipes.
+
+    The dry run reads the current list (a connection is required) and lists
+    each item that would change with its ID, current state, and description.
+    IDs or names that match nothing are reported in `warnings`.
+
+    Args:
+        item_ids: Comma, space, or newline-separated item IDs.
+        names: Comma or newline-separated item names.
+        owned: True marks items as owned; false marks them as needed again.
+        dry_run: Preview the matched items without sending changes.
+    """
+    global _cookidoo_service
+
+    try:
+        parsed_item_ids = _split_ids(item_ids)
+        parsed_names = _split_item_names(names)
+        if not parsed_item_ids and not parsed_names:
+            raise ValueError("Pass item_ids, names, or both")
+        if not _cookidoo_service:
+            return "Not connected. Please run 'connect_to_cookidoo' first."
+
+        if dry_run:
+            plan = await _cookidoo_service.plan_shopping_list_ownership(
+                parsed_item_ids,
+                parsed_names,
+                owned,
+            )
+            return _dry_run_result(
+                "set_shopping_list_items_owned",
+                "mark shopping-list items as " + ("owned" if owned else "needed"),
+                target={
+                    "owned": owned,
+                    "item_ids": parsed_item_ids,
+                    "names": parsed_names,
+                },
+                changes={
+                    "items": plan["changes"],
+                    "already_in_state": plan["already_in_state"],
+                    "unmatched_item_ids": plan["unmatched_item_ids"],
+                    "unmatched_names": plan["unmatched_names"],
+                },
+                notes=plan["warnings"]
+                + (
+                    []
+                    if plan["changes"]
+                    else ["No item would change; applying would do nothing."]
+                ),
+            )
+
+        result = await _cookidoo_service.set_shopping_list_items_owned(
+            parsed_item_ids,
+            parsed_names,
+            owned,
+        )
+        return json.dumps(result, ensure_ascii=False, indent=2)
+    except Exception as e:
+        return f"Failed to update shopping-list ownership: {str(e)}"
+
+
+@mcp.tool()
+async def add_additional_items_to_shopping_list(
+    names: str,
+    dry_run: bool = False,
+) -> str:
+    """
+    Add manual items that do not come from a recipe to the shopping list.
+
+    Args:
+        names: Comma or newline-separated item names, e.g. "napkins, coffee".
+        dry_run: Preview the items without sending them to Cookidoo.
+    """
+    global _cookidoo_service
+
+    try:
+        parsed_names = list(dict.fromkeys(_split_item_names(names)))
+        if not parsed_names:
+            raise ValueError("At least one item name is required")
+        if dry_run:
+            return _dry_run_result(
+                "add_additional_items_to_shopping_list",
+                "add additional items to shopping list",
+                target={"shopping_list": "Cookidoo shopping list"},
+                changes={"names": parsed_names},
+                notes=["Cookidoo creates new items as still needed."],
+            )
+
+        if not _cookidoo_service:
+            return "Not connected. Please run 'connect_to_cookidoo' first."
+
+        result = await _cookidoo_service.add_shopping_list_additional_items(
+            parsed_names
+        )
+        return json.dumps(result, ensure_ascii=False, indent=2)
+    except Exception as e:
+        return f"Failed to add additional shopping-list items: {str(e)}"
+
+
+@mcp.tool()
+async def remove_additional_items_from_shopping_list(
+    item_ids: str,
+    dry_run: bool = False,
+) -> str:
+    """
+    Remove manual (non-recipe) items from the shopping list by ID.
+
+    Only IDs from `additional_items` in get_shopping_list_ingredients are
+    accepted; the call is refused if any ID is not an additional item. Use
+    remove_recipes_from_shopping_list for recipe ingredients.
+
+    Args:
+        item_ids: Comma, space, or newline-separated additional-item IDs.
+        dry_run: Preview the items that would be removed. Reads the current
+            list, so a connection is required.
+    """
+    global _cookidoo_service
+
+    try:
+        parsed_item_ids = _split_ids(item_ids)
+        if not parsed_item_ids:
+            raise ValueError("At least one item ID is required")
+        if not _cookidoo_service:
+            return "Not connected. Please run 'connect_to_cookidoo' first."
+
+        if dry_run:
+            plan = await (
+                _cookidoo_service.plan_shopping_list_additional_item_removal(
+                    parsed_item_ids
+                )
+            )
+            return _dry_run_result(
+                "remove_additional_items_from_shopping_list",
+                "remove additional items from shopping list",
+                target={"item_ids": parsed_item_ids},
+                changes={
+                    "items": plan["items"],
+                    "unknown_item_ids": plan["unknown_item_ids"],
+                },
+                notes=(
+                    [
+                        "Applying will be refused because these IDs are not "
+                        "additional items: "
+                        + ", ".join(plan["unknown_item_ids"])
+                    ]
+                    if plan["unknown_item_ids"]
+                    else []
+                ),
+            )
+
+        result = await _cookidoo_service.remove_shopping_list_additional_items(
+            parsed_item_ids
+        )
+        return json.dumps(result, ensure_ascii=False, indent=2)
+    except Exception as e:
+        return f"Failed to remove additional shopping-list items: {str(e)}"
+
+
+@mcp.tool()
 async def get_meal_plan_week(date: str) -> str:
     """
     Get Cookidoo's complete seven-day meal-plan window.
@@ -386,7 +677,7 @@ async def add_recipes_to_meal_plan(
     try:
         parsed_date = _parse_calendar_date(date)
         parsed_recipe_ids = _parse_recipe_ids(recipe_ids)
-        sources = _meal_plan_sources(parsed_recipe_ids, recipe_source)
+        sources = _recipe_sources(parsed_recipe_ids, recipe_source)
         if dry_run:
             return _dry_run_result(
                 "add_recipes_to_meal_plan",

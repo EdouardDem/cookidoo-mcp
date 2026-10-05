@@ -1,6 +1,6 @@
 # Cookidoo MCP tool reference
 
-The server exposes 16 tools.
+The server exposes 21 tools.
 
 ## Authentication
 
@@ -32,17 +32,31 @@ The server exposes 16 tools.
 ## Shopping
 
 - `get_shopping_list_ingredients(recipe_id=None, include_owned=false, include_additional_items=true)`
+- `add_recipes_to_shopping_list(recipe_ids, recipe_source="auto", dry_run=false)` — add recipe ingredients; returns the updated list.
+- `remove_recipes_from_shopping_list(recipe_ids, recipe_source="auto", dry_run=false)` — remove recipes and their ingredients.
+- `set_shopping_list_items_owned(item_ids="", names="", owned=true, dry_run=false)` — mark items owned or needed by ID or name.
+- `add_additional_items_to_shopping_list(names, dry_run=false)` — add manual items.
+- `remove_additional_items_from_shopping_list(item_ids, dry_run=false)` — remove manual items by ID.
+
+`set_shopping_list_items_owned` matches comma-separated `names` as whole words,
+ignoring case, accents, and the articles/partitives de, d', du, des, le, la,
+l', les. `"sel"` matches "du sel" but not "persil" or "selle"; `"eau"` matches
+"d'eau" and "eau bouillante". Names or IDs that match nothing are reported in
+`warnings`.
 
 Machine-readable descriptions and complete signatures are available in [`tools.json`](../tools.json).
 
 ## Preview changes safely
 
-Every tool that creates or changes a recipe, image, or calendar entry accepts
-`dry_run`. Call it with `dry_run=true` first. The response validates the input
+Every tool that creates or changes a recipe, image, calendar entry, or
+shopping-list item accepts `dry_run`. Call it with `dry_run=true` first. The response validates the input
 and returns `will_mutate: false`, the exact target and planned changes, and
 notes about the operation. Review that JSON, then repeat the same call with
 `dry_run=false` to apply it.
 
-Recipe and calendar previews do not need an active Cookidoo session. Image
+Recipe, calendar, and shopping-list recipe or new-item previews do not need an
+active Cookidoo session. Ownership and additional-item removal previews read the
+current shopping list to show exactly which items would change, so they need a
+session, but they never write. Image
 previews read and normalize the local file in memory to validate its type and
 size, but never upload it.

@@ -75,6 +75,8 @@
   "summary": {}
 }</code></pre></div>
             <div class="callout"><strong>Quantity lives in <code>description</code></strong><p><code>CookidooIngredient</code> does not expose an <code>ingredient.quantity</code> field.</p></div>
+            <h3>Fill and tidy the list</h3>
+            <p>After planning, <a href="../tools/#add-recipes-to-shopping-list"><code>add_recipes_to_shopping_list</code></a> adds the week's recipes. Then <a href="../tools/#set-shopping-list-items-owned"><code>set_shopping_list_items_owned</code></a> marks pantry staples as owned so they no longer appear as things to buy. A name such as <code>sel</code> matches every item that contains that whole word, for example “du sel” but not “persil”. Run it with <code>dry_run=true</code> first, check the listed item IDs and descriptions, then apply.</p>
           </section>
 
           <section id="planner">
@@ -114,6 +116,7 @@
               <li>Adapt and validate its content.</li>
               <li>Read the target seven-day window.</li>
               <li>Add the official or private recipe to the intended date.</li>
+              <li>Add the planned recipes to the shopping list and mark staples as owned.</li>
               <li>Read shopping-list ingredients grouped by recipe.</li>
               <li>Hand structured grocery data to the next authorized workflow.</li>
             </ol>

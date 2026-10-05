@@ -28,6 +28,36 @@
       "description": "Return normalized shopping-list items, optionally grouped for one recipe."
     },
     {
+      "name": "add_recipes_to_shopping_list",
+      "signature": "add_recipes_to_shopping_list(recipe_ids: str, recipe_source: str = \"auto\", dry_run: bool = false)",
+      "category": "shopping",
+      "description": "Add the ingredients of one or more official or custom recipes to the shopping list and return the updated list."
+    },
+    {
+      "name": "remove_recipes_from_shopping_list",
+      "signature": "remove_recipes_from_shopping_list(recipe_ids: str, recipe_source: str = \"auto\", dry_run: bool = false)",
+      "category": "shopping",
+      "description": "Remove one or more recipes and their ingredients from the shopping list."
+    },
+    {
+      "name": "set_shopping_list_items_owned",
+      "signature": "set_shopping_list_items_owned(item_ids: str = \"\", names: str = \"\", owned: bool = true, dry_run: bool = false)",
+      "category": "shopping",
+      "description": "Mark ingredients and additional items as owned or needed, selected by exact ID or by accent- and article-insensitive whole-word name."
+    },
+    {
+      "name": "add_additional_items_to_shopping_list",
+      "signature": "add_additional_items_to_shopping_list(names: str, dry_run: bool = false)",
+      "category": "shopping",
+      "description": "Add manual items that do not come from a recipe to the shopping list."
+    },
+    {
+      "name": "remove_additional_items_from_shopping_list",
+      "signature": "remove_additional_items_from_shopping_list(item_ids: str, dry_run: bool = false)",
+      "category": "shopping",
+      "description": "Remove manual shopping-list items by ID; ingredient IDs are refused."
+    },
+    {
       "name": "get_meal_plan_week",
       "signature": "get_meal_plan_week(date: str)",
       "category": "planning",

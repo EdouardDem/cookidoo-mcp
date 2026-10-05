@@ -41,7 +41,7 @@ understand what the product helps them do.
 
 | Audience need | Message | Proof |
 |---|---|---|
-| Less repetitive work | Let one AI conversation coordinate the recipe workflow. | 16 purpose-built MCP tools |
+| Less repetitive work | Let one AI conversation coordinate the recipe workflow. | 21 purpose-built MCP tools |
 | More useful inspiration | Adapt recipes from other languages and sources into clear Thermomix steps. | Structured ingredients, TTS, and modes |
 | More intentional meals | Move from recipe ideas to a seven-day plan and shopping-list data. | Shopping and meal-plan tools |
 | Confidence for beginners | Keep weighing, adding, and machine actions explicit and separate. | Enforced recipe-step validation |

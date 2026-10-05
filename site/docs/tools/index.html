@@ -61,7 +61,7 @@
         </aside>
 
         <article class="docs-content">
-          <p class="eyebrow">Reference / 16 tools</p>
+          <p class="eyebrow">Reference / 21 tools</p>
           <h1>Tool reference</h1>
           <p class="lead">Authenticate once, then coordinate recipe reads, validated writes, shopping data, and calendar actions through purpose-built MCP calls.</p>
 
@@ -75,6 +75,11 @@
             <a class="tool-card" href="#get-recipe-details"><code>get_recipe_details</code><span>Official recipe metadata</span></a>
             <a class="tool-card" href="#get-custom-recipe-details"><code>get_custom_recipe_details</code><span>Full private recipe</span></a>
             <a class="tool-card" href="#get-shopping-list-ingredients"><code>get_shopping_list_ingredients</code><span>Recipe-grouped groceries</span></a>
+            <a class="tool-card" href="#add-recipes-to-shopping-list"><code>add_recipes_to_shopping_list</code><span>Add recipe groceries</span></a>
+            <a class="tool-card" href="#remove-recipes-from-shopping-list"><code>remove_recipes_from_shopping_list</code><span>Remove recipe groceries</span></a>
+            <a class="tool-card" href="#set-shopping-list-items-owned"><code>set_shopping_list_items_owned</code><span>Mark staples owned</span></a>
+            <a class="tool-card" href="#add-additional-items-to-shopping-list"><code>add_additional_items_to_shopping_list</code><span>Add manual items</span></a>
+            <a class="tool-card" href="#remove-additional-items-from-shopping-list"><code>remove_additional_items_from_shopping_list</code><span>Remove manual items</span></a>
             <a class="tool-card" href="#get-meal-plan-week"><code>get_meal_plan_week</code><span>Seven-day window</span></a>
             <a class="tool-card" href="#add-recipes-to-meal-plan"><code>add_recipes_to_meal_plan</code><span>Plan recipes</span></a>
             <a class="tool-card" href="#remove-recipe-from-meal-plan"><code>remove_recipe_from_meal_plan</code><span>Remove planned recipe</span></a>
@@ -92,7 +97,7 @@
           <section aria-labelledby="preview-title">
             <p class="section-kicker">Safe changes</p>
             <h2 id="preview-title">Preview before you apply</h2>
-            <p>Every tool that creates or changes a recipe, image, or meal-plan entry accepts <code>dry_run</code>. Call it with <code>dry_run=true</code> first to validate the input and receive <code>will_mutate: false</code>, the exact target, planned changes, and safety notes. Review the JSON, then repeat the same call with <code>dry_run=false</code> to apply it.</p>
+            <p>Every tool that creates or changes a recipe, image, meal-plan entry, or shopping-list item accepts <code>dry_run</code>. Call it with <code>dry_run=true</code> first to validate the input and receive <code>will_mutate: false</code>, the exact target, planned changes, and safety notes. Review the JSON, then repeat the same call with <code>dry_run=false</code> to apply it.</p>
             <div class="callout"><strong>A preview never writes to Cookidoo</strong><p>An image preview reads and converts the local file in memory to verify its format and size, but does not upload or attach it.</p></div>
           </section>
 
@@ -134,6 +139,59 @@
               </tbody>
             </table>
             <p><strong>Returns:</strong> JSON containing recipe groups, a flat ingredient list, additional items, and summary counts.</p>
+          </section>
+
+          <section class="tool-reference" id="add-recipes-to-shopping-list">
+            <p class="section-kicker">Shopping</p>
+            <h2>add_recipes_to_shopping_list</h2>
+            <p><code class="signature">add_recipes_to_shopping_list(recipe_ids, recipe_source="auto", dry_run=false)</code></p>
+            <table class="reference-table">
+              <thead><tr><th>Parameter</th><th>Description</th></tr></thead>
+              <tbody>
+                <tr><td><code>recipe_ids</code></td><td>Comma, whitespace, or newline-separated IDs.</td></tr>
+                <tr><td><code>recipe_source</code></td><td><code>auto</code>, <code>official</code>, or <code>custom</code>.</td></tr>
+                <tr><td><code>dry_run</code></td><td>Validate and preview without changing the shopping list.</td></tr>
+              </tbody>
+            </table>
+            <p>Adds every ingredient of each recipe as still needed. Mixed official and customer IDs are partitioned into the correct Cookidoo calls. <strong>Returns:</strong> the added IDs and <code>shopping_list</code>, in the same shape as <code>get_shopping_list_ingredients</code>.</p>
+          </section>
+
+          <section class="tool-reference" id="remove-recipes-from-shopping-list">
+            <p class="section-kicker">Shopping</p>
+            <h2>remove_recipes_from_shopping_list</h2>
+            <p><code class="signature">remove_recipes_from_shopping_list(recipe_ids, recipe_source="auto", dry_run=false)</code></p>
+            <p>Accepts the same IDs as <code>add_recipes_to_shopping_list</code> and removes those recipes and their ingredients from the list. The recipes themselves are unchanged. Returns the updated list.</p>
+          </section>
+
+          <section class="tool-reference" id="set-shopping-list-items-owned">
+            <p class="section-kicker">Shopping</p>
+            <h2>set_shopping_list_items_owned</h2>
+            <p><code class="signature">set_shopping_list_items_owned(item_ids="", names="", owned=true, dry_run=false)</code></p>
+            <table class="reference-table">
+              <thead><tr><th>Parameter</th><th>Description</th></tr></thead>
+              <tbody>
+                <tr><td><code>item_ids</code></td><td>Exact ingredient or additional-item IDs, separated by commas, whitespace, or newlines.</td></tr>
+                <tr><td><code>names</code></td><td>Comma-separated names such as <code>eau, sel, poivre</code>.</td></tr>
+                <tr><td><code>owned</code></td><td><code>true</code> hides items from the default list; <code>false</code> marks them as needed again.</td></tr>
+                <tr><td><code>dry_run</code></td><td>List the exact items that would change, without changing them.</td></tr>
+              </tbody>
+            </table>
+            <p>Names match whole words and ignore case, accents, and the French articles and partitives <em>de, d', du, des, le, la, l', les</em>. <code>sel</code> matches “du sel” but not “persil” or “selle d'agneau”; <code>eau</code> matches “d'eau” and “eau bouillante”. Every matching item is selected, including the same ingredient in several recipes.</p>
+            <div class="callout"><strong>Check the preview</strong><p>The dry run reads the current list, so it needs a session. It shows each item's ID, description, recipe, and current state. Names or IDs that match nothing are listed under <code>warnings</code> instead of being ignored.</p></div>
+          </section>
+
+          <section class="tool-reference" id="add-additional-items-to-shopping-list">
+            <p class="section-kicker">Shopping</p>
+            <h2>add_additional_items_to_shopping_list</h2>
+            <p><code class="signature">add_additional_items_to_shopping_list(names, dry_run=false)</code></p>
+            <p>Adds comma or newline-separated manual items that do not come from a recipe. New items start as needed.</p>
+          </section>
+
+          <section class="tool-reference" id="remove-additional-items-from-shopping-list">
+            <p class="section-kicker">Shopping</p>
+            <h2>remove_additional_items_from_shopping_list</h2>
+            <p><code class="signature">remove_additional_items_from_shopping_list(item_ids, dry_run=false)</code></p>
+            <p>Removes manual items by the IDs listed in <code>additional_items</code>. The call is refused if any ID is not an additional item; use <code>remove_recipes_from_shopping_list</code> for recipe ingredients.</p>
           </section>
 
           <section class="tool-reference" id="get-meal-plan-week">

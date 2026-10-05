@@ -39,8 +39,9 @@ the next automation for product search or ordering.
 - **Make cooking clearer:** keep weighing, adding, mixing, heating, and other
   Thermomix actions easy to follow.
 - **Plan the week:** add, remove, or move meals on the Cookidoo calendar.
-- **Prepare for shopping:** collect ingredients while keeping them connected to
-  their recipes.
+- **Prepare for shopping:** add the week's recipes to the Cookidoo shopping
+  list, mark pantry staples you already have as owned, and keep ingredients
+  connected to their recipes.
 - **Keep personal recipes recognizable:** upload an image you own.
 
 ## Explore
@@ -133,10 +134,11 @@ An MCP client can use the same command:
 Use an absolute path. The exact location of the MCP configuration file depends
 on your client; the command and arguments remain the same.
 
-Before a tool creates or changes a recipe, image, or calendar entry, the server
-instructs the assistant to request a `dry_run` preview first. The preview
-validates the input and shows the target and planned changes without writing to
-Cookidoo; applying the same call with `dry_run=false` performs the change.
+Before a tool creates or changes a recipe, image, calendar entry, or
+shopping-list item, the server instructs the assistant to request a `dry_run`
+preview first. The preview validates the input and shows the target and planned
+changes without writing to Cookidoo; applying the same call with
+`dry_run=false` performs the change.
 
 <details>
 <summary><strong>Run from source for development</strong></summary>
