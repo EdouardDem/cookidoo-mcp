@@ -18,8 +18,13 @@ import unicodedata
 from dotenv import load_dotenv
 from aiohttp import ClientSession, FormData
 from cookidoo_api import Cookidoo, CookidooConfig
-from cookidoo_api.const import REMOVE_RECIPE_FROM_CALENDER_PATH
+from cookidoo_api.const import (
+    INGREDIENT_ITEMS_PATH,
+    REMOVE_RECIPE_FROM_CALENDER_PATH,
+)
 from cookidoo_api.helpers import (
+    cookidoo_additional_item_from_json,
+    cookidoo_ingredient_item_from_json,
     get_localization_options,
 )
 from cookidoo_api.types import CookidooAdditionalItem, CookidooIngredientItem
@@ -301,22 +306,32 @@ class CookidooService:
         if self._api_client is None:
             raise RuntimeError("Not connected to Cookidoo")
 
-        recipes, ingredient_items, additional_items = await asyncio.gather(
+        # Recipe ingredients from get_shopping_list_recipes carry catalog IDs
+        # (ingredient_ref), shared between recipes. Ownership is stored on the
+        # shopping-list item IDs, so items must come from the raw grouping.
+        recipes, raw_list = await asyncio.gather(
             self._api_client.get_shopping_list_recipes(),
-            self._api_client.get_ingredient_items(),
-            self._api_client.get_additional_items(),
+            self._fetch_shopping_list_items(),
         )
+        recipes_by_id = {recipe.id: recipe for recipe in recipes}
+        raw_recipes = [
+            *raw_list.get("recipes", []),
+            *raw_list.get("customerRecipes", []),
+        ]
+        additional_items = [
+            cookidoo_additional_item_from_json(item)
+            for item in raw_list.get("additionalItems", [])
+        ]
 
-        ownership_by_id = {
-            ingredient.id: ingredient.is_owned for ingredient in ingredient_items
-        }
         selected_recipes = (
-            [recipe for recipe in recipes if recipe.id == recipe_id]
+            [recipe for recipe in raw_recipes if recipe["id"] == recipe_id]
             if recipe_id
-            else recipes
+            else raw_recipes
         )
         if recipe_id and not selected_recipes:
-            available = ", ".join(f"{recipe.id} ({recipe.name})" for recipe in recipes)
+            available = ", ".join(
+                f"{recipe['id']} ({recipe.get('title')})" for recipe in raw_recipes
+            )
             raise ValueError(
                 f"Recipe {recipe_id!r} is not in the shopping list. "
                 f"Available recipes: {available or 'none'}"
@@ -326,32 +341,35 @@ class CookidooService:
         flat_ingredients: list[dict[str, Any]] = []
         owned_count = 0
 
-        for recipe in selected_recipes:
+        for raw_recipe in selected_recipes:
+            metadata = recipes_by_id.get(raw_recipe["id"])
+            recipe_name = metadata.name if metadata else raw_recipe.get("title")
             ingredients: list[dict[str, Any]] = []
-            for ingredient in recipe.ingredients:
-                is_owned = ownership_by_id.get(ingredient.id, False)
-                if is_owned:
+            for raw_item in raw_recipe.get("recipeIngredientGroups", []):
+                ingredient = cookidoo_ingredient_item_from_json(raw_item)
+                if ingredient.is_owned:
                     owned_count += 1
-                if is_owned and not include_owned:
+                if ingredient.is_owned and not include_owned:
                     continue
                 item = {
                     "id": ingredient.id,
                     "name": ingredient.name,
                     "description": ingredient.description,
-                    "is_owned": is_owned,
-                    "recipe_id": recipe.id,
-                    "recipe_name": recipe.name,
+                    "is_owned": ingredient.is_owned,
+                    "ingredient_ref": raw_item.get("ingredient_ref"),
+                    "recipe_id": raw_recipe["id"],
+                    "recipe_name": recipe_name,
                 }
                 ingredients.append(item)
                 flat_ingredients.append(item)
 
             recipe_groups.append(
                 {
-                    "id": recipe.id,
-                    "name": recipe.name,
-                    "url": recipe.url,
-                    "image": recipe.image,
-                    "thumbnail": recipe.thumbnail,
+                    "id": raw_recipe["id"],
+                    "name": recipe_name,
+                    "url": metadata.url if metadata else None,
+                    "image": metadata.image if metadata else None,
+                    "thumbnail": metadata.thumbnail if metadata else None,
                     "ingredient_count": len(ingredients),
                     "ingredients": ingredients,
                 }
@@ -382,6 +400,30 @@ class CookidooService:
                 "filtered_recipe_id": recipe_id,
             },
         }
+
+    async def _fetch_shopping_list_items(self) -> dict[str, Any]:
+        """Return Cookidoo's raw shopping-list items grouped by recipe.
+
+        ``cookidoo-api``'s ``get_ingredient_items`` reads the same endpoint but
+        flattens it and drops the recipe each item belongs to.
+        """
+
+        if self._api_client is None:
+            raise RuntimeError("Not connected to Cookidoo")
+
+        url = self._api_client.api_endpoint / INGREDIENT_ITEMS_PATH.format(
+            **self._api_client._cfg.localization.__dict__
+        )
+        async with self._api_client._session.get(
+            url,
+            headers=self._api_client._api_headers,
+        ) as response:
+            if response.status > 299:
+                raise RuntimeError(
+                    "Cookidoo rejected the shopping-list read. "
+                    f"Status: {response.status}, Error: {await response.text()}"
+                )
+            return await response.json()
 
     async def add_shopping_list_recipes(
         self,

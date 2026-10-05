@@ -606,9 +606,20 @@ owns a local image, upload that image through the supported flow.
 
 `CookidooService.get_shopping_list_ingredients()` concurrently reads:
 
-- recipes currently in the shopping list;
-- ingredient ownership state;
-- manually added items.
+- `GET shopping/{language}` directly (`_fetch_shopping_list_items`), which
+  groups shopping-list items by recipe under `recipes` and `customerRecipes`
+  and lists manual items under `additionalItems`;
+- `get_shopping_list_recipes()`, used only for recipe URLs and images.
+
+Cookidoo uses two ID spaces. Each shopping-list item has its own ULID `id`,
+which carries `isOwned` and is the only ID the ownership endpoints accept. The
+ingredients of `get_shopping_list_recipes()` instead carry catalog IDs
+(`ingredient_ref`, e.g. `com.vorwerk.ingredients.Ingredient-rpf-24`), which
+repeat across recipes. Never use catalog IDs as item IDs. `cookidoo-api`'s
+`get_ingredient_items()` reads the same endpoint but flattens it and drops the
+recipe link, so the service reads it directly and parses items with
+`cookidoo_ingredient_item_from_json`. The returned items expose both `id` and
+`ingredient_ref`.
 
 It returns:
 

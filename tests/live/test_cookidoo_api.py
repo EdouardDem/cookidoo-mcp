@@ -97,6 +97,12 @@ def test_shopping_list_contract(cookidoo: LiveCookidooContext) -> None:
     assert result["summary"]["recipe_count"] == len(result["recipes"])
     assert result["summary"]["ingredient_count"] == len(result["ingredients"])
 
+    # Ownership is stored on shopping-item IDs, not catalog ingredient IDs.
+    item_ids = {
+        item.id for item in cookidoo.run(cookidoo.api.get_ingredient_items())
+    }
+    assert {item["id"] for item in result["ingredients"]} == item_ids
+
 
 def test_meal_plan_contract(cookidoo: LiveCookidooContext) -> None:
     requested_day = date.today()

@@ -12,61 +12,87 @@ from cookidoo_service import (
 )
 
 
+def raw_item(
+    item_id: str,
+    name: str,
+    description: str,
+    owned: bool,
+    ingredient_ref: str,
+) -> dict[str, Any]:
+    """Build one item as Cookidoo's shopping endpoint returns it."""
+
+    quantity, _, unit = description.partition(" ")
+    item: dict[str, Any] = {
+        "id": item_id,
+        "ingredientNotation": name,
+        "isOwned": owned,
+        "ingredient_ref": ingredient_ref,
+        "localId": ingredient_ref,
+    }
+    if quantity:
+        item["quantity"] = {"value": quantity}
+    if unit:
+        item["unitNotation"] = unit
+    return item
+
+
+def recipe_metadata(recipe_id: str, name: str) -> SimpleNamespace:
+    """Recipe metadata as returned by get_shopping_list_recipes.
+
+    Its ingredients carry catalog IDs, never shopping-list item IDs.
+    """
+
+    return SimpleNamespace(
+        id=recipe_id,
+        name=name,
+        url=f"https://example.test/{recipe_id}",
+        image=None,
+        thumbnail=None,
+        ingredients=[
+            SimpleNamespace(id="catalog-shared", name="ignored", description="")
+        ],
+    )
+
+
 class FakeShoppingApi:
     async def get_shopping_list_recipes(self):
         return [
-            SimpleNamespace(
-                id="recipe-1",
-                name="Recipe One",
-                url="https://example.test/recipe-1",
-                image=None,
-                thumbnail=None,
-                ingredients=[
-                    SimpleNamespace(
-                        id="ingredient-1",
-                        name="Rice",
-                        description="200 g rice",
-                    ),
-                    SimpleNamespace(
-                        id="ingredient-2",
-                        name="Salt",
-                        description="1 tsp salt",
-                    ),
-                ],
-            ),
-            SimpleNamespace(
-                id="recipe-2",
-                name="Recipe Two",
-                url="https://example.test/recipe-2",
-                image=None,
-                thumbnail=None,
-                ingredients=[
-                    SimpleNamespace(
-                        id="ingredient-3",
-                        name="Water",
-                        description="500 g water",
-                    )
-                ],
-            ),
+            recipe_metadata("recipe-1", "Recipe One"),
+            recipe_metadata("recipe-2", "Recipe Two"),
         ]
 
-    async def get_ingredient_items(self):
-        return [
-            SimpleNamespace(id="ingredient-1", is_owned=False),
-            SimpleNamespace(id="ingredient-2", is_owned=True),
-            SimpleNamespace(id="ingredient-3", is_owned=False),
-        ]
-
-    async def get_additional_items(self):
-        return [
-            SimpleNamespace(id="additional-1", name="Napkins", is_owned=False),
-            SimpleNamespace(id="additional-2", name="Soap", is_owned=True),
-        ]
+    async def raw_shopping_items(self):
+        return {
+            "recipes": [
+                {
+                    "id": "recipe-1",
+                    "title": "Recipe One",
+                    "recipeIngredientGroups": [
+                        raw_item("ingredient-1", "Rice", "200 g", False, "ref-rice"),
+                        raw_item("ingredient-2", "Salt", "1 tsp", True, "ref-salt"),
+                    ],
+                },
+                {
+                    "id": "recipe-2",
+                    "title": "Recipe Two",
+                    "recipeIngredientGroups": [
+                        raw_item("ingredient-3", "Water", "500 g", False, "ref-water"),
+                    ],
+                },
+            ],
+            "customerRecipes": [],
+            "additionalItems": [
+                {"id": "additional-1", "name": "Napkins", "isOwned": False},
+                {"id": "additional-2", "name": "Soap", "isOwned": True},
+            ],
+        }
 
 
 def service_with_fake_api() -> CookidooService:
     service = CookidooService("test@example.com", "secret")
-    service._api_client = FakeShoppingApi()
+    api = FakeShoppingApi()
+    service._api_client = api
+    service._fetch_shopping_list_items = api.raw_shopping_items
     return service
 
 
@@ -87,6 +113,38 @@ def test_shopping_list_is_grouped_and_excludes_owned_by_default() -> None:
         ]
         assert result["recipes"][0]["ingredients"][0]["recipe_id"] == "recipe-1"
         assert result["additional_items"][0]["name"] == "Napkins"
+
+    asyncio.run(run())
+
+
+def test_shopping_list_uses_item_ids_not_catalog_ingredient_ids() -> None:
+    """Ownership lives on shopping-item IDs; recipe ingredients carry catalog IDs.
+
+    Regression: using the catalog IDs made every item look unowned and sent
+    IDs to the ownership endpoint that Cookidoo could not match.
+    """
+
+    async def run():
+        result = await service_with_fake_api().get_shopping_list_ingredients(
+            include_owned=True,
+        )
+        assert [item["id"] for item in result["ingredients"]] == [
+            "ingredient-1",
+            "ingredient-2",
+            "ingredient-3",
+        ]
+        assert [item["ingredient_ref"] for item in result["ingredients"]] == [
+            "ref-rice",
+            "ref-salt",
+            "ref-water",
+        ]
+        assert [item["is_owned"] for item in result["ingredients"]] == [
+            False,
+            True,
+            False,
+        ]
+        assert result["ingredients"][0]["description"] == "200 g"
+        assert result["recipes"][0]["url"] == "https://example.test/recipe-1"
 
     asyncio.run(run())
 
@@ -161,29 +219,35 @@ class FakeFrenchShoppingApi:
 
     async def get_shopping_list_recipes(self):
         return [
-            SimpleNamespace(
-                id=recipe_id,
-                name=f"Recette {recipe_id}",
-                url=None,
-                image=None,
-                thumbnail=None,
-                ingredients=[
-                    SimpleNamespace(
-                        id=ingredient_id,
-                        name=self.ingredients[ingredient_id][0],
-                        description=self.ingredients[ingredient_id][1],
-                    )
-                    for ingredient_id in ingredient_ids
-                ],
-            )
-            for recipe_id, ingredient_ids in self.recipe_ingredients.items()
+            recipe_metadata(recipe_id, f"Recette {recipe_id}")
+            for recipe_id in self.recipe_ingredients
         ]
 
-    async def get_ingredient_items(self):
-        return [
-            SimpleNamespace(id=item_id, name=name, description=desc, is_owned=owned)
-            for item_id, (name, desc, owned) in self.ingredients.items()
+    async def raw_shopping_items(self):
+        recipes = [
+            {
+                "id": recipe_id,
+                "title": f"Recette {recipe_id}",
+                "recipeIngredientGroups": [
+                    raw_item(
+                        item_id,
+                        *self.ingredients[item_id],
+                        # Catalog refs repeat across recipes, unlike item IDs.
+                        ingredient_ref=f"catalog-{self.ingredients[item_id][0]}",
+                    )
+                    for item_id in item_ids
+                ],
+            }
+            for recipe_id, item_ids in self.recipe_ingredients.items()
         ]
+        return {
+            "recipes": [r for r in recipes if r["id"].startswith("r")],
+            "customerRecipes": [r for r in recipes if not r["id"].startswith("r")],
+            "additionalItems": [
+                {"id": item_id, "name": name, "isOwned": owned}
+                for item_id, (name, owned) in self.additional.items()
+            ],
+        }
 
     async def get_additional_items(self):
         return [
@@ -251,6 +315,7 @@ def french_service() -> tuple[CookidooService, FakeFrenchShoppingApi]:
     service = CookidooService("test@example.com", "secret")
     api = FakeFrenchShoppingApi()
     service._api_client = api
+    service._fetch_shopping_list_items = api.raw_shopping_items
     return service, api
 
 

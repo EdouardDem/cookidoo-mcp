@@ -48,12 +48,8 @@
           <section id="shopping">
             <p class="section-kicker">Shopping list</p>
             <h2>Ingredients remain connected to their recipes.</h2>
-            <p>The service reads three Cookidoo sources concurrently:</p>
-            <ul>
-              <li>recipes currently represented in the shopping list;</li>
-              <li>ingredient ownership state;</li>
-              <li>manually added items.</li>
-            </ul>
+            <p>The service reads Cookidoo's shopping-list items grouped by recipe, including ownership state and manually added items, plus recipe links and images.</p>
+            <div class="callout"><strong>Use the item <code>id</code></strong><p>Each item's <code>id</code> is its shopping-list ID, the one ownership changes need. <code>ingredient_ref</code> is the shared catalog ingredient ID and can repeat across recipes.</p></div>
             <p>The result includes recipe groups, a flat ingredient list, optional additional items, and summary counts. A valid account may have an empty shopping list; consumers must support empty arrays.</p>
             <div class="code-shell"><pre><code>{
   "recipes": [
