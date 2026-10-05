@@ -48,12 +48,8 @@
           <section id="shopping">
             <p class="section-kicker">Shopping list</p>
             <h2>Ingredients remain connected to their recipes.</h2>
-            <p>The service reads three Cookidoo sources concurrently:</p>
-            <ul>
-              <li>recipes currently represented in the shopping list;</li>
-              <li>ingredient ownership state;</li>
-              <li>manually added items.</li>
-            </ul>
+            <p>The service reads Cookidoo's shopping-list items grouped by recipe, including ownership state and manually added items, plus recipe links and images.</p>
+            <div class="callout"><strong>Use the item <code>id</code></strong><p>Each item's <code>id</code> is its shopping-list ID, the one ownership changes need. <code>ingredient_ref</code> is the shared catalog ingredient ID and can repeat across recipes.</p></div>
             <p>The result includes recipe groups, a flat ingredient list, optional additional items, and summary counts. A valid account may have an empty shopping list; consumers must support empty arrays.</p>
             <div class="code-shell"><pre><code>{
   "recipes": [
@@ -75,6 +71,8 @@
   "summary": {}
 }</code></pre></div>
             <div class="callout"><strong>Quantity lives in <code>description</code></strong><p><code>CookidooIngredient</code> does not expose an <code>ingredient.quantity</code> field.</p></div>
+            <h3>Fill and tidy the list</h3>
+            <p>After planning, <a href="../tools/#add-recipes-to-shopping-list"><code>add_recipes_to_shopping_list</code></a> adds the week's recipes. Then <a href="../tools/#set-shopping-list-items-owned"><code>set_shopping_list_items_owned</code></a> marks pantry staples as owned so they no longer appear as things to buy. A name such as <code>sel</code> matches every item that contains that whole word, for example “du sel” but not “persil”. Run it with <code>dry_run=true</code> first, check the listed item IDs and descriptions, then apply.</p>
           </section>
 
           <section id="planner">
@@ -114,6 +112,7 @@
               <li>Adapt and validate its content.</li>
               <li>Read the target seven-day window.</li>
               <li>Add the official or private recipe to the intended date.</li>
+              <li>Add the planned recipes to the shopping list and mark staples as owned.</li>
               <li>Read shopping-list ingredients grouped by recipe.</li>
               <li>Hand structured grocery data to the next authorized workflow.</li>
             </ol>

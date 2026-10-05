@@ -5,6 +5,7 @@ from pathlib import Path
 from PIL import Image
 
 import server
+from test_shopping_list import french_service
 
 
 CUSTOM_RECIPE_ID = "01ARZ3NDEKTSV4RRFFQ69G5FAV"
@@ -151,3 +152,94 @@ def test_dry_run_rejects_invalid_inputs_without_mutating(
         )
     )
     assert "does not exist" in missing_image
+
+
+def test_shopping_list_recipe_dry_runs_partition_without_a_connection(
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(server, "_cookidoo_service", None)
+
+    for tool in (
+        server.add_recipes_to_shopping_list,
+        server.remove_recipes_from_shopping_list,
+    ):
+        preview = _preview(
+            tool(f"r460132,\n{CUSTOM_RECIPE_ID} r460132", dry_run=True)
+        )
+        assert preview["changes"] == {
+            "official_recipe_ids": ["r460132"],
+            "custom_recipe_ids": [CUSTOM_RECIPE_ID],
+        }
+        assert preview["apply"]["tool"] == tool.__name__
+
+    assert "Cannot infer" in _run(
+        server.add_recipes_to_shopping_list("not-an-id", dry_run=True)
+    )
+
+
+def test_shopping_list_dry_runs_never_call_write_endpoints(monkeypatch) -> None:
+    service, api = french_service()
+    monkeypatch.setattr(server, "_cookidoo_service", service)
+
+    _preview(server.add_recipes_to_shopping_list("r1", dry_run=True))
+    _preview(
+        server.remove_recipes_from_shopping_list(CUSTOM_RECIPE_ID, dry_run=True)
+    )
+    owned = _preview(
+        server.set_shopping_list_items_owned(
+            names="eau, sel, poivre, cumin",
+            dry_run=True,
+        )
+    )
+    _preview(
+        server.add_additional_items_to_shopping_list("Café", dry_run=True)
+    )
+    removal = _preview(
+        server.remove_additional_items_from_shopping_list(
+            "add-serviettes ing-sel",
+            dry_run=True,
+        )
+    )
+
+    assert api.writes == []
+    assert owned["target"]["names"] == ["eau", "sel", "poivre", "cumin"]
+    assert {
+        (item["id"], item["current_is_owned"], item["description"])
+        for item in owned["changes"]["items"]
+    } == {
+        ("ing-eau", False, "500 g"),
+        ("ing-sel", False, "1 pincée"),
+        ("ing-sel-2", False, "1 c. à café"),
+        ("ing-poivre", False, "1 pincée"),
+        ("add-sel", False, None),
+    }
+    assert owned["changes"]["unmatched_names"] == ["cumin"]
+    assert "No shopping-list item matches name 'cumin'." in owned["notes"]
+    assert removal["changes"]["items"] == [
+        {"id": "add-serviettes", "name": "Serviettes", "is_owned": False}
+    ]
+    assert removal["changes"]["unknown_item_ids"] == ["ing-sel"]
+
+
+def test_shopping_list_ownership_tools_report_errors_without_writing(
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(server, "_cookidoo_service", None)
+    assert "Not connected" in _run(
+        server.set_shopping_list_items_owned(names="sel", dry_run=True)
+    )
+    assert "Pass item_ids, names, or both" in _run(
+        server.set_shopping_list_items_owned(dry_run=True)
+    )
+
+    service, api = french_service()
+    monkeypatch.setattr(server, "_cookidoo_service", service)
+    applied = json.loads(
+        _run(server.set_shopping_list_items_owned(names="cumin"))
+    )
+    assert applied["operation"] == "unchanged"
+    assert applied["warnings"] == ["No shopping-list item matches name 'cumin'."]
+    assert "ing-sel" in _run(
+        server.remove_additional_items_from_shopping_list("ing-sel")
+    )
+    assert api.writes == []

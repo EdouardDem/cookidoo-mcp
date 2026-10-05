@@ -13,7 +13,8 @@ It lets an AI client authenticate to a Cookidoo account and work with:
 - full recipe copying and translation workflows;
 - structured guided-cooking settings;
 - custom recipe images;
-- the Cookidoo shopping list;
+- the Cookidoo shopping list (read, add/remove recipes and manual items, mark
+  items as owned);
 - the Cookidoo meal-planning calendar.
 
 The implementation combines the third-party `cookidoo-api` Python package with
@@ -278,10 +279,15 @@ Live tests currently verify:
 - the seven-day meal-planning endpoint;
 - custom image-upload signature generation;
 - copy, GET, ingredient PATCH, instruction PATCH, and DELETE for a temporary
-  customer recipe.
+  customer recipe;
+- adding and removing a shopping-list recipe, and adding, marking as owned,
+  and removing a temporary additional item.
 
 The mutation test uses official recipe `r460132` as a stable source, creates a
-temporary private copy, and removes it in `finally`.
+temporary private copy, and removes it in `finally`. The shopping-list mutation
+test skips when `r460132` is already in the user's list, changes only the
+recipe and additional item it created, removes both in `finally`, and asserts
+that the list's recipe and additional-item IDs match the starting state.
 
 ## GitHub Actions monitoring
 
@@ -366,6 +372,11 @@ Recipe writes:
 Shopping and planning:
 
 - `get_shopping_list_ingredients`
+- `add_recipes_to_shopping_list`
+- `remove_recipes_from_shopping_list`
+- `set_shopping_list_items_owned`
+- `add_additional_items_to_shopping_list`
+- `remove_additional_items_from_shopping_list`
 - `get_meal_plan_week`
 - `add_recipes_to_meal_plan`
 - `remove_recipe_from_meal_plan`
@@ -386,12 +397,20 @@ Every MCP tool that creates or changes account data accepts
 - `upload_custom_recipe_image`;
 - `add_recipes_to_meal_plan`;
 - `remove_recipe_from_meal_plan`;
-- `move_recipe_in_meal_plan`.
+- `move_recipe_in_meal_plan`;
+- `add_recipes_to_shopping_list`;
+- `remove_recipes_from_shopping_list`;
+- `set_shopping_list_items_owned`;
+- `add_additional_items_to_shopping_list`;
+- `remove_additional_items_from_shopping_list`.
 
 Call a mutation with `dry_run=true` first. The tool validates the inputs and
 returns JSON containing `will_mutate: false`, the target, the exact planned
-changes, notes, and an apply instruction. Recipe and calendar previews do not
-require an authenticated session. Image previews read and normalize the local
+changes, notes, and an apply instruction. Recipe, calendar, shopping-list
+recipe, and new additional-item previews do not require an authenticated
+session. `set_shopping_list_items_owned` and
+`remove_additional_items_from_shopping_list` previews read the current shopping
+list to resolve the exact items, so they need a session, but never write. Image previews read and normalize the local
 file in memory to verify its format and size, but do not upload or PATCH it.
 Apply only after reviewing the preview by repeating the same call with
 `dry_run=false`.
@@ -587,9 +606,20 @@ owns a local image, upload that image through the supported flow.
 
 `CookidooService.get_shopping_list_ingredients()` concurrently reads:
 
-- recipes currently in the shopping list;
-- ingredient ownership state;
-- manually added items.
+- `GET shopping/{language}` directly (`_fetch_shopping_list_items`), which
+  groups shopping-list items by recipe under `recipes` and `customerRecipes`
+  and lists manual items under `additionalItems`;
+- `get_shopping_list_recipes()`, used only for recipe URLs and images.
+
+Cookidoo uses two ID spaces. Each shopping-list item has its own ULID `id`,
+which carries `isOwned` and is the only ID the ownership endpoints accept. The
+ingredients of `get_shopping_list_recipes()` instead carry catalog IDs
+(`ingredient_ref`, e.g. `com.vorwerk.ingredients.Ingredient-rpf-24`), which
+repeat across recipes. Never use catalog IDs as item IDs. `cookidoo-api`'s
+`get_ingredient_items()` reads the same endpoint but flattens it and drops the
+recipe link, so the service reads it directly and parses items with
+`cookidoo_ingredient_item_from_json`. The returned items expose both `id` and
+`ingredient_ref`.
 
 It returns:
 
@@ -603,6 +633,27 @@ nonexistent `ingredient.quantity` field.
 
 The method may return valid empty lists. Live tests must not assume the account
 currently has shopping-list content.
+
+Shopping-list writes use only `cookidoo-api` methods; no direct HTTP is needed:
+
+- `add_shopping_list_recipes` / `remove_shopping_list_recipes` partition IDs
+  with `_partition_recipe_ids` (the same source inference as the calendar) and
+  call `add_/remove_ingredient_items_for_recipes` for official IDs and
+  `add_/remove_ingredient_items_for_custom_recipes` for custom IDs. They return
+  the updated list under `shopping_list`.
+- `plan_shopping_list_ownership` is read-only. It resolves exact item IDs and
+  names against ingredient and additional items. Names match whole words via
+  `shopping_item_name_matches`, ignoring case, accents, `œ`/`æ`, and the French
+  articles/partitives de, d', du, des, le, la, l', les. `sel` must match
+  `du sel` but never `selle` or `persil`. Unmatched IDs and names are returned
+  in `unmatched_item_ids`, `unmatched_names`, and `warnings`, never dropped.
+- `set_shopping_list_items_owned` applies that plan with
+  `edit_ingredient_items_ownership` and `edit_additional_items_ownership`,
+  sending only items whose state actually changes. When nothing changes, it
+  makes no write call.
+- `remove_shopping_list_additional_items` refuses the whole call if any ID is
+  not a current additional item, so ingredient IDs cannot be removed by mistake.
+- `clear_shopping_list` is intentionally not exposed.
 
 ## Meal-planning contract
 

@@ -97,6 +97,12 @@ def test_shopping_list_contract(cookidoo: LiveCookidooContext) -> None:
     assert result["summary"]["recipe_count"] == len(result["recipes"])
     assert result["summary"]["ingredient_count"] == len(result["ingredients"])
 
+    # Ownership is stored on shopping-item IDs, not catalog ingredient IDs.
+    item_ids = {
+        item.id for item in cookidoo.run(cookidoo.api.get_ingredient_items())
+    }
+    assert {item["id"] for item in result["ingredients"]} == item_ids
+
 
 def test_meal_plan_contract(cookidoo: LiveCookidooContext) -> None:
     requested_day = date.today()
@@ -164,3 +170,77 @@ def test_custom_recipe_copy_patch_and_delete(
             cookidoo.run(
                 cookidoo.api.remove_custom_recipe(created_recipe_id)
             )
+
+
+def test_shopping_list_add_own_and_remove(
+    cookidoo: LiveCookidooContext,
+) -> None:
+    if os.getenv("COOKIDOO_LIVE_MUTATIONS") != "1":
+        pytest.skip(
+            "Set COOKIDOO_LIVE_MUTATIONS=1 to test temporary shopping-list writes"
+        )
+
+    before = cookidoo.run(
+        cookidoo.service.get_shopping_list_ingredients(include_owned=True)
+    )
+    if any(recipe["id"] == REFERENCE_RECIPE_ID for recipe in before["recipes"]):
+        pytest.skip(
+            f"{REFERENCE_RECIPE_ID} is already in the shopping list; "
+            "skipping so the user's list is left untouched"
+        )
+
+    recipe_added = False
+    additional_item_id: str | None = None
+    try:
+        added = cookidoo.run(
+            cookidoo.service.add_shopping_list_recipes([REFERENCE_RECIPE_ID])
+        )
+        recipe_added = True
+        assert added["official_recipe_ids"] == [REFERENCE_RECIPE_ID]
+        assert REFERENCE_RECIPE_ID in {
+            recipe["id"] for recipe in added["shopping_list"]["recipes"]
+        }
+
+        extra = cookidoo.run(
+            cookidoo.service.add_shopping_list_additional_items(
+                [f"cookidoo-mcp live test {int(time.time())}"]
+            )
+        )
+        additional_item_id = extra["added_items"][0]["id"]
+
+        owned = cookidoo.run(
+            cookidoo.service.set_shopping_list_items_owned(
+                [additional_item_id],
+                [],
+            )
+        )
+        assert [change["id"] for change in owned["changes"]] == [
+            additional_item_id
+        ]
+        assert any(
+            item["id"] == additional_item_id and item["is_owned"]
+            for item in owned["shopping_list"]["additional_items"]
+        )
+    finally:
+        if additional_item_id is not None:
+            cookidoo.run(
+                cookidoo.service.remove_shopping_list_additional_items(
+                    [additional_item_id]
+                )
+            )
+        if recipe_added:
+            cookidoo.run(
+                cookidoo.service.remove_shopping_list_recipes(
+                    [REFERENCE_RECIPE_ID]
+                )
+            )
+
+    after = cookidoo.run(
+        cookidoo.service.get_shopping_list_ingredients(include_owned=True)
+    )
+    assert {recipe["id"] for recipe in after["recipes"]} == {
+        recipe["id"] for recipe in before["recipes"]
+    }
+    assert {item["id"] for item in after["additional_items"]} == {
+        item["id"] for item in before["additional_items"]
+    }

@@ -9,7 +9,7 @@ Cookidoo MCP connects an AI assistant to a user's own Cookidoo account. It can i
 - [Setup wizard](https://vitaliemiron.github.io/cookidoo-mcp/setup/): copy-ready configuration for Codex, Claude Desktop, or VS Code on macOS, Linux, or Windows
 - [Documentation](https://vitaliemiron.github.io/cookidoo-mcp/docs/): overview and quick start
 - [Practical use cases](https://vitaliemiron.github.io/cookidoo-mcp/use-cases/): task-focused guides for recipe translation, guided cooking, planning, shopping, and API research
-- [Tool reference](https://vitaliemiron.github.io/cookidoo-mcp/docs/tools/): all 16 MCP tools and signatures
+- [Tool reference](https://vitaliemiron.github.io/cookidoo-mcp/docs/tools/): all 21 MCP tools and signatures
 - [Guided cooking](https://vitaliemiron.github.io/cookidoo-mcp/docs/guided-cooking/): TTS, INGREDIENT, VOLUME, MODE, and UTF-16 positions
 - [Planning and shopping](https://vitaliemiron.github.io/cookidoo-mcp/docs/automation/): seven-day plans and shopping-list data
 - [Testing and reliability](https://vitaliemiron.github.io/cookidoo-mcp/docs/testing/): unit tests, five live contracts, and daily monitoring

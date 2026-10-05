@@ -86,7 +86,7 @@ def test_tool_catalog_matches_server_tools() -> None:
     catalog_names = {tool["name"] for tool in catalog["tools"]}
 
     assert catalog_names == _server_tool_names()
-    assert len(catalog["tools"]) == 16
+    assert len(catalog["tools"]) == 21
     assert all(tool["signature"] and tool["description"] for tool in catalog["tools"])
 
 
@@ -131,7 +131,7 @@ def test_ai_resources_cover_every_documentation_area() -> None:
         "/tools.json",
     ):
         assert path in llms
-    for rule in ("Required step separation", "UTF-16", "16. upload_custom_recipe"):
+    for rule in ("Required step separation", "UTF-16", "21. upload_custom_recipe"):
         assert rule in full
     for guide in (
         "translate-cookidoo-recipe",

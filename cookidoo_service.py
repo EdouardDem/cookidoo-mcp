@@ -13,14 +13,21 @@ from pathlib import Path
 import re
 import time
 from typing import Any, Optional
+import unicodedata
 
 from dotenv import load_dotenv
 from aiohttp import ClientSession, FormData
 from cookidoo_api import Cookidoo, CookidooConfig
-from cookidoo_api.const import REMOVE_RECIPE_FROM_CALENDER_PATH
+from cookidoo_api.const import (
+    INGREDIENT_ITEMS_PATH,
+    REMOVE_RECIPE_FROM_CALENDER_PATH,
+)
 from cookidoo_api.helpers import (
+    cookidoo_additional_item_from_json,
+    cookidoo_ingredient_item_from_json,
     get_localization_options,
 )
+from cookidoo_api.types import CookidooAdditionalItem, CookidooIngredientItem
 import aiohttp
 from PIL import Image, ImageOps, UnidentifiedImageError
 
@@ -34,6 +41,46 @@ CLOUDINARY_UPLOAD_URL = (
 MAX_CUSTOM_RECIPE_IMAGE_BYTES = 10 * 1024 * 1024
 DEFAULT_COOKIDOO_COUNTRY = "ro"
 DEFAULT_COOKIDOO_LANGUAGE = "en"
+# French articles and partitives ignored when matching shopping-list names, so
+# "du sel", "de sel", and "sel" all refer to the same item.
+SHOPPING_ITEM_NAME_STOPWORDS = frozenset(
+    {"de", "d", "du", "des", "le", "la", "l", "les"}
+)
+
+
+def shopping_item_name_words(value: str) -> tuple[str, ...]:
+    """Normalize a shopping-list item name into comparable words.
+
+    Case and accents are ignored, elisions such as ``d'eau`` are split, and
+    French articles/partitives are dropped.
+    """
+
+    text = unicodedata.normalize("NFKD", value.casefold())
+    text = "".join(char for char in text if not unicodedata.combining(char))
+    text = text.replace("œ", "oe").replace("æ", "ae")
+    return tuple(
+        word
+        for word in re.findall(r"[^\W_]+", text)
+        if word not in SHOPPING_ITEM_NAME_STOPWORDS
+    )
+
+
+def shopping_item_name_matches(item_name: str, query: str) -> bool:
+    """Return whether ``query`` appears as whole words inside ``item_name``.
+
+    ``sel`` matches ``du sel`` and ``sel fin`` but not ``selle`` or
+    ``persil``; ``eau`` matches ``d'eau`` and ``eau bouillante``.
+    """
+
+    item_words = shopping_item_name_words(item_name)
+    query_words = shopping_item_name_words(query)
+    if not query_words:
+        return False
+    width = len(query_words)
+    return any(
+        item_words[start : start + width] == query_words
+        for start in range(len(item_words) - width + 1)
+    )
 
 
 def normalize_cookidoo_country(country: str) -> str:
@@ -259,22 +306,32 @@ class CookidooService:
         if self._api_client is None:
             raise RuntimeError("Not connected to Cookidoo")
 
-        recipes, ingredient_items, additional_items = await asyncio.gather(
+        # Recipe ingredients from get_shopping_list_recipes carry catalog IDs
+        # (ingredient_ref), shared between recipes. Ownership is stored on the
+        # shopping-list item IDs, so items must come from the raw grouping.
+        recipes, raw_list = await asyncio.gather(
             self._api_client.get_shopping_list_recipes(),
-            self._api_client.get_ingredient_items(),
-            self._api_client.get_additional_items(),
+            self._fetch_shopping_list_items(),
         )
+        recipes_by_id = {recipe.id: recipe for recipe in recipes}
+        raw_recipes = [
+            *raw_list.get("recipes", []),
+            *raw_list.get("customerRecipes", []),
+        ]
+        additional_items = [
+            cookidoo_additional_item_from_json(item)
+            for item in raw_list.get("additionalItems", [])
+        ]
 
-        ownership_by_id = {
-            ingredient.id: ingredient.is_owned for ingredient in ingredient_items
-        }
         selected_recipes = (
-            [recipe for recipe in recipes if recipe.id == recipe_id]
+            [recipe for recipe in raw_recipes if recipe["id"] == recipe_id]
             if recipe_id
-            else recipes
+            else raw_recipes
         )
         if recipe_id and not selected_recipes:
-            available = ", ".join(f"{recipe.id} ({recipe.name})" for recipe in recipes)
+            available = ", ".join(
+                f"{recipe['id']} ({recipe.get('title')})" for recipe in raw_recipes
+            )
             raise ValueError(
                 f"Recipe {recipe_id!r} is not in the shopping list. "
                 f"Available recipes: {available or 'none'}"
@@ -284,32 +341,35 @@ class CookidooService:
         flat_ingredients: list[dict[str, Any]] = []
         owned_count = 0
 
-        for recipe in selected_recipes:
+        for raw_recipe in selected_recipes:
+            metadata = recipes_by_id.get(raw_recipe["id"])
+            recipe_name = metadata.name if metadata else raw_recipe.get("title")
             ingredients: list[dict[str, Any]] = []
-            for ingredient in recipe.ingredients:
-                is_owned = ownership_by_id.get(ingredient.id, False)
-                if is_owned:
+            for raw_item in raw_recipe.get("recipeIngredientGroups", []):
+                ingredient = cookidoo_ingredient_item_from_json(raw_item)
+                if ingredient.is_owned:
                     owned_count += 1
-                if is_owned and not include_owned:
+                if ingredient.is_owned and not include_owned:
                     continue
                 item = {
                     "id": ingredient.id,
                     "name": ingredient.name,
                     "description": ingredient.description,
-                    "is_owned": is_owned,
-                    "recipe_id": recipe.id,
-                    "recipe_name": recipe.name,
+                    "is_owned": ingredient.is_owned,
+                    "ingredient_ref": raw_item.get("ingredient_ref"),
+                    "recipe_id": raw_recipe["id"],
+                    "recipe_name": recipe_name,
                 }
                 ingredients.append(item)
                 flat_ingredients.append(item)
 
             recipe_groups.append(
                 {
-                    "id": recipe.id,
-                    "name": recipe.name,
-                    "url": recipe.url,
-                    "image": recipe.image,
-                    "thumbnail": recipe.thumbnail,
+                    "id": raw_recipe["id"],
+                    "name": recipe_name,
+                    "url": metadata.url if metadata else None,
+                    "image": metadata.image if metadata else None,
+                    "thumbnail": metadata.thumbnail if metadata else None,
                     "ingredient_count": len(ingredients),
                     "ingredients": ingredients,
                 }
@@ -341,6 +401,330 @@ class CookidooService:
             },
         }
 
+    async def _fetch_shopping_list_items(self) -> dict[str, Any]:
+        """Return Cookidoo's raw shopping-list items grouped by recipe.
+
+        ``cookidoo-api``'s ``get_ingredient_items`` reads the same endpoint but
+        flattens it and drops the recipe each item belongs to.
+        """
+
+        if self._api_client is None:
+            raise RuntimeError("Not connected to Cookidoo")
+
+        url = self._api_client.api_endpoint / INGREDIENT_ITEMS_PATH.format(
+            **self._api_client._cfg.localization.__dict__
+        )
+        async with self._api_client._session.get(
+            url,
+            headers=self._api_client._api_headers,
+        ) as response:
+            if response.status > 299:
+                raise RuntimeError(
+                    "Cookidoo rejected the shopping-list read. "
+                    f"Status: {response.status}, Error: {await response.text()}"
+                )
+            return await response.json()
+
+    async def add_shopping_list_recipes(
+        self,
+        recipe_ids: list[str],
+        recipe_source: str = "auto",
+    ) -> dict[str, Any]:
+        """Add the ingredients of official and/or custom recipes to the list."""
+
+        if self._api_client is None:
+            raise RuntimeError("Not connected to Cookidoo")
+
+        sources = self._partition_recipe_ids(recipe_ids, recipe_source)
+        if sources["official"]:
+            await self._api_client.add_ingredient_items_for_recipes(
+                sources["official"]
+            )
+        if sources["custom"]:
+            await self._api_client.add_ingredient_items_for_custom_recipes(
+                sources["custom"]
+            )
+
+        return {
+            "operation": "added",
+            "official_recipe_ids": sources["official"],
+            "custom_recipe_ids": sources["custom"],
+            "shopping_list": await self.get_shopping_list_ingredients(),
+        }
+
+    async def remove_shopping_list_recipes(
+        self,
+        recipe_ids: list[str],
+        recipe_source: str = "auto",
+    ) -> dict[str, Any]:
+        """Remove official and/or custom recipes and their ingredients."""
+
+        if self._api_client is None:
+            raise RuntimeError("Not connected to Cookidoo")
+
+        sources = self._partition_recipe_ids(recipe_ids, recipe_source)
+        if sources["official"]:
+            await self._api_client.remove_ingredient_items_for_recipes(
+                sources["official"]
+            )
+        if sources["custom"]:
+            await self._api_client.remove_ingredient_items_for_custom_recipes(
+                sources["custom"]
+            )
+
+        return {
+            "operation": "removed",
+            "official_recipe_ids": sources["official"],
+            "custom_recipe_ids": sources["custom"],
+            "shopping_list": await self.get_shopping_list_ingredients(),
+        }
+
+    async def plan_shopping_list_ownership(
+        self,
+        item_ids: list[str],
+        names: list[str],
+        owned: bool = True,
+    ) -> dict[str, Any]:
+        """Resolve item IDs and names to exact ownership changes without writing.
+
+        Ingredient items and additional items are both considered. Names match
+        whole words, ignoring case, accents, and French articles/partitives.
+        """
+
+        unique_ids = list(dict.fromkeys(i.strip() for i in item_ids if i.strip()))
+        unique_names = list(dict.fromkeys(n.strip() for n in names if n.strip()))
+        if not unique_ids and not unique_names:
+            raise ValueError("Pass at least one item ID or item name")
+        for name in unique_names:
+            if not shopping_item_name_words(name):
+                raise ValueError(
+                    f"Name {name!r} contains no words to match after removing "
+                    "articles"
+                )
+
+        shopping_list = await self.get_shopping_list_ingredients(
+            include_owned=True,
+            include_additional_items=True,
+        )
+        candidates = [
+            {
+                "id": ingredient["id"],
+                "kind": "ingredient",
+                "name": ingredient["name"],
+                "description": ingredient["description"],
+                "recipe_id": ingredient["recipe_id"],
+                "recipe_name": ingredient["recipe_name"],
+                "current_is_owned": ingredient["is_owned"],
+            }
+            for ingredient in shopping_list["ingredients"]
+        ] + [
+            {
+                "id": item["id"],
+                "kind": "additional_item",
+                "name": item["name"],
+                "description": None,
+                "recipe_id": None,
+                "recipe_name": None,
+                "current_is_owned": item["is_owned"],
+            }
+            for item in shopping_list["additional_items"]
+        ]
+
+        changes: list[dict[str, Any]] = []
+        already_in_state: list[dict[str, Any]] = []
+        seen_ids: set[str] = set()
+        matched_ids: set[str] = set()
+        matched_names: set[str] = set()
+        for candidate in candidates:
+            if candidate["id"] in seen_ids:
+                continue
+            seen_ids.add(candidate["id"])
+            id_match = candidate["id"] in unique_ids
+            name_matches = [
+                name
+                for name in unique_names
+                if shopping_item_name_matches(candidate["name"], name)
+            ]
+            if not id_match and not name_matches:
+                continue
+            if id_match:
+                matched_ids.add(candidate["id"])
+            matched_names.update(name_matches)
+            entry = {
+                **candidate,
+                "new_is_owned": owned,
+                "matched_by": {"item_id": id_match, "names": name_matches},
+            }
+            if candidate["current_is_owned"] == owned:
+                already_in_state.append(entry)
+            else:
+                changes.append(entry)
+
+        unmatched_ids = [i for i in unique_ids if i not in matched_ids]
+        unmatched_names = [n for n in unique_names if n not in matched_names]
+        warnings = [
+            f"No shopping-list item has ID {item_id!r}."
+            for item_id in unmatched_ids
+        ] + [
+            f"No shopping-list item matches name {name!r}."
+            for name in unmatched_names
+        ]
+
+        return {
+            "owned": owned,
+            "changes": changes,
+            "already_in_state": already_in_state,
+            "unmatched_item_ids": unmatched_ids,
+            "unmatched_names": unmatched_names,
+            "warnings": warnings,
+        }
+
+    async def set_shopping_list_items_owned(
+        self,
+        item_ids: list[str],
+        names: list[str],
+        owned: bool = True,
+    ) -> dict[str, Any]:
+        """Mark matching ingredient and additional items as owned or needed."""
+
+        if self._api_client is None:
+            raise RuntimeError("Not connected to Cookidoo")
+
+        plan = await self.plan_shopping_list_ownership(item_ids, names, owned)
+        ingredient_items = [
+            CookidooIngredientItem(
+                id=change["id"],
+                name=change["name"],
+                is_owned=owned,
+                description=change["description"] or "",
+            )
+            for change in plan["changes"]
+            if change["kind"] == "ingredient"
+        ]
+        additional_items = [
+            CookidooAdditionalItem(
+                id=change["id"],
+                name=change["name"],
+                is_owned=owned,
+            )
+            for change in plan["changes"]
+            if change["kind"] == "additional_item"
+        ]
+        if ingredient_items:
+            await self._api_client.edit_ingredient_items_ownership(
+                ingredient_items
+            )
+        if additional_items:
+            await self._api_client.edit_additional_items_ownership(
+                additional_items
+            )
+
+        return {
+            "operation": "updated ownership" if plan["changes"] else "unchanged",
+            **plan,
+            "shopping_list": await self.get_shopping_list_ingredients(
+                include_owned=True,
+            ),
+        }
+
+    async def add_shopping_list_additional_items(
+        self,
+        names: list[str],
+    ) -> dict[str, Any]:
+        """Add manual (non-recipe) items to the shopping list."""
+
+        if self._api_client is None:
+            raise RuntimeError("Not connected to Cookidoo")
+
+        unique_names = list(dict.fromkeys(n.strip() for n in names if n.strip()))
+        if not unique_names:
+            raise ValueError("At least one item name is required")
+
+        added = await self._api_client.add_additional_items(unique_names)
+        return {
+            "operation": "added",
+            "added_items": [
+                {"id": item.id, "name": item.name, "is_owned": item.is_owned}
+                for item in added
+            ],
+            "shopping_list": await self.get_shopping_list_ingredients(),
+        }
+
+    async def plan_shopping_list_additional_item_removal(
+        self,
+        item_ids: list[str],
+    ) -> dict[str, Any]:
+        """Resolve additional-item IDs to the items a removal would delete."""
+
+        if self._api_client is None:
+            raise RuntimeError("Not connected to Cookidoo")
+
+        unique_ids = list(dict.fromkeys(i.strip() for i in item_ids if i.strip()))
+        if not unique_ids:
+            raise ValueError("At least one item ID is required")
+
+        items_by_id = {
+            item.id: item for item in await self._api_client.get_additional_items()
+        }
+        return {
+            "items": [
+                {
+                    "id": item_id,
+                    "name": items_by_id[item_id].name,
+                    "is_owned": items_by_id[item_id].is_owned,
+                }
+                for item_id in unique_ids
+                if item_id in items_by_id
+            ],
+            "unknown_item_ids": [
+                item_id for item_id in unique_ids if item_id not in items_by_id
+            ],
+        }
+
+    async def remove_shopping_list_additional_items(
+        self,
+        item_ids: list[str],
+    ) -> dict[str, Any]:
+        """Remove manual items; refuses IDs that are not additional items."""
+
+        plan = await self.plan_shopping_list_additional_item_removal(item_ids)
+        if plan["unknown_item_ids"]:
+            raise ValueError(
+                "Not additional items in the shopping list: "
+                + ", ".join(plan["unknown_item_ids"])
+            )
+
+        await self._api_client.remove_additional_items(
+            [item["id"] for item in plan["items"]]
+        )
+        return {
+            "operation": "removed",
+            "removed_items": plan["items"],
+            "shopping_list": await self.get_shopping_list_ingredients(),
+        }
+
+    @staticmethod
+    def _partition_recipe_ids(
+        recipe_ids: list[str],
+        recipe_source: str = "auto",
+    ) -> dict[str, list[str]]:
+        """Split recipe IDs into the official and custom API operations."""
+
+        unique_recipe_ids = list(
+            dict.fromkeys(recipe_id.strip() for recipe_id in recipe_ids if recipe_id.strip())
+        )
+        if not unique_recipe_ids:
+            raise ValueError("At least one recipe ID is required")
+
+        result: dict[str, list[str]] = {"official": [], "custom": []}
+        for recipe_id in unique_recipe_ids:
+            source = CookidooService._meal_plan_recipe_source(
+                recipe_id,
+                recipe_source,
+            )
+            result[source].append(recipe_id)
+        return result
+
     @staticmethod
     def _meal_plan_recipe_source(
         recipe_id: str,
@@ -369,7 +753,7 @@ class CookidooService:
         if re.fullmatch(r"[0-9A-HJKMNP-TV-Z]{26}", recipe_id):
             return "custom"
         raise ValueError(
-            f"Cannot infer calendar source for recipe {recipe_id!r}. "
+            f"Cannot infer recipe source for {recipe_id!r}. "
             "Pass recipe_source='official' or recipe_source='custom'."
         )
 
@@ -524,20 +908,9 @@ class CookidooService:
         if self._api_client is None:
             raise RuntimeError("Not connected to Cookidoo")
 
-        unique_recipe_ids = list(
-            dict.fromkeys(recipe_id.strip() for recipe_id in recipe_ids if recipe_id.strip())
-        )
-        if not unique_recipe_ids:
-            raise ValueError("At least one recipe ID is required")
-
-        official_ids: list[str] = []
-        custom_ids: list[str] = []
-        for recipe_id in unique_recipe_ids:
-            source = self._meal_plan_recipe_source(recipe_id, recipe_source)
-            if source == "official":
-                official_ids.append(recipe_id)
-            else:
-                custom_ids.append(recipe_id)
+        sources = self._partition_recipe_ids(recipe_ids, recipe_source)
+        official_ids = sources["official"]
+        custom_ids = sources["custom"]
 
         if official_ids:
             await self._api_client.add_recipes_to_calendar(day, official_ids)

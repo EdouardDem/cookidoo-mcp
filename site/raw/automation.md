@@ -20,4 +20,12 @@ changing the calendar.
 
 `get_shopping_list_ingredients` returns structured ingredients for either the full Cookidoo list or a single recipe. Owned items and user-added items can be included or excluded.
 
+To fill and tidy the list after planning:
+
+1. Add the week's recipes with `add_recipes_to_shopping_list(recipe_ids, dry_run=true)`, review, then apply.
+2. Preview `set_shopping_list_items_owned(names="eau, sel, poivre", dry_run=true)`. Names match whole words, ignoring case, accents, and French articles, so `sel` matches "du sel" but not "persil". The preview lists every matched item's ID, description, and current state, plus names that matched nothing.
+3. Apply with `dry_run=false`. Owned items are then hidden from the default list.
+
+Manual items can be managed with `add_additional_items_to_shopping_list` and `remove_additional_items_from_shopping_list`.
+
 This output is suitable for handing to another grocery-search or cart integration. Cookidoo MCP does not choose store products or place purchases itself.
