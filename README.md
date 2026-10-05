@@ -107,12 +107,19 @@ by your Cookidoo account.
 Prefer the **[guided setup wizard](https://vitaliemiron.github.io/cookidoo-mcp/setup/)**
 if you do not regularly edit terminal commands or JSON configuration.
 
-With [`uv`](https://docs.astral.sh/uv/) installed, run the published package
-without cloning the repository:
+With [`uv`](https://docs.astral.sh/uv/) installed, run this fork straight from
+GitHub without cloning the repository:
 
 ```bash
-uvx cookidoo-mcp --env-file ~/.config/cookidoo-mcp/.env
+uvx --from git+https://github.com/EdouardDem/cookidoo-mcp cookidoo-mcp \
+  --env-file ~/.config/cookidoo-mcp/.env
 ```
+
+This fork includes the shopping-list write tools (adding and removing recipes,
+marking pantry staples as owned, and managing manual items). The command
+installs the fork's default branch. To use a specific branch or tag, add
+`@<name>` to the URL, for example
+`git+https://github.com/EdouardDem/cookidoo-mcp@main`.
 
 An MCP client can use the same command:
 
@@ -122,6 +129,8 @@ An MCP client can use the same command:
     "cookidoo": {
       "command": "uvx",
       "args": [
+        "--from",
+        "git+https://github.com/EdouardDem/cookidoo-mcp",
         "cookidoo-mcp",
         "--env-file",
         "/absolute/path/to/cookidoo-mcp.env"
@@ -131,8 +140,21 @@ An MCP client can use the same command:
 }
 ```
 
+In Claude Code, the equivalent is:
+
+```bash
+claude mcp add cookidoo -- uvx --from git+https://github.com/EdouardDem/cookidoo-mcp \
+  cookidoo-mcp --env-file /absolute/path/to/cookidoo-mcp.env
+```
+
 Use an absolute path. The exact location of the MCP configuration file depends
-on your client; the command and arguments remain the same.
+on your client; the command and arguments remain the same. `uv` caches the
+build, so to pick up new commits from the fork, run
+`uv cache clean cookidoo-mcp` (or add `--refresh` to the `uvx` arguments) and
+restart your MCP client.
+
+The upstream package published on PyPI (`uvx cookidoo-mcp --env-file …`) also
+works, but it does not include this fork's shopping-list write tools.
 
 Before a tool creates or changes a recipe, image, calendar entry, or
 shopping-list item, the server instructs the assistant to request a `dry_run`
@@ -146,7 +168,7 @@ changes without writing to Cookidoo; applying the same call with
 Python 3.12 or newer is required.
 
 ```bash
-git clone https://github.com/vitaliemiron/cookidoo-mcp.git
+git clone https://github.com/EdouardDem/cookidoo-mcp.git
 cd cookidoo-mcp
 python3 -m venv venv
 source venv/bin/activate
